@@ -1,0 +1,11 @@
+{
+  "name": "AuroraORM",
+  "description": "ORM leve para Delphi focado em FireDAC, PostgreSQL e SQLite",
+  "version": "1.0.0",
+  "homepage": "",
+  "mainsrc": "./",
+  "projects": [
+    "AuroraORM.dproj"
+  ],
+  "dependencies": {}
+}

@@ -1,0 +1,27 @@
+package AuroraORM;
+
+{$R *.res}
+{$IMPLICITBUILD ON}
+
+requires
+  rtl,
+  vcl,
+  dbrtl,
+  FireDAC,
+  FireDACCommonDriver,
+  FireDACCommon,
+  bindengine,
+  bindcomp;
+
+contains
+  AuroraAttributes in 'AuroraAttributes.pas',
+  AuroraDAO in 'AuroraDAO.pas',
+  AuroraInterface in 'AuroraInterface.pas',
+  AuroraQueryFiredac in 'AuroraQueryFiredac.pas',
+  AuroraRTTI in 'AuroraRTTI.pas',
+  AuroraSQL in 'AuroraSQL.pas',
+  AuroraEntity in 'AuroraEntity.pas',
+  AuroraConfig in 'AuroraConfig.pas',
+  Aurora.Migrations in 'Aurora.Migrations.pas';
+
+end.
