@@ -28,6 +28,13 @@ type
   end;
 
   FK = class(TCustomAttribute)
+  private
+    FTable: string;
+    FColumn: string;
+  public
+    constructor Create(const aTable, aColumn: string);
+    property Table: string read FTable;
+    property Column: string read FColumn;
   end;
 
   NotNull = class(TCustomAttribute)
@@ -43,6 +50,33 @@ type
   end;
 
   Blob = class(TCustomAttribute)
+  end;
+
+  Unique = class(TCustomAttribute)
+  end;
+
+  Index = class(TCustomAttribute)
+  private
+    FName: string;
+  public
+    constructor Create(const aName: string = '');
+    property Name: string read FName;
+  end;
+
+  // Validação: e-mail em formato válido
+  Email = class(TCustomAttribute)
+  end;
+
+  // Controle específico de exposição JSON
+  JsonIgnore = class(TCustomAttribute)
+  end;
+
+  JsonCampo = class(TCustomAttribute)
+  private
+    FName: string;
+  public
+    constructor Create(const aName: string);
+    property Name: string read FName;
   end;
 
   Bind = class(TCustomAttribute)
@@ -135,6 +169,13 @@ begin
   FName := aName;
 end;
 
+{ JsonCampo }
+
+constructor JsonCampo.Create(const aName: string);
+begin
+  FName := aName;
+end;
+
 { Formato }
 
 constructor Format.Create(const aSize, aPrecision: integer);
@@ -172,3 +213,12 @@ begin
 end;
 
 end.
+constructor FK.Create(const aTable, aColumn: string);
+begin
+  FTable := aTable;
+  FColumn := aColumn;
+end;
+constructor Index.Create(const aName: string);
+begin
+  FName := aName;
+end;

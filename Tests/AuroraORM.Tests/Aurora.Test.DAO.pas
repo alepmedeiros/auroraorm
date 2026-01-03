@@ -8,8 +8,10 @@ uses
   Data.DB,
   AuroraConfig,
   AuroraDAO,
-  AuroraMock.SimpleQuery,
-  Entities.User;
+  AuroraMock.Query,
+  Entities.User,
+  Entities.Order,
+  Entities.Profile;
 
 type
   [TestFixture]
@@ -31,6 +33,12 @@ type
 
     [Test]
     procedure FindOneWhere_ReturnsEntity_FromMockedDataSet;
+
+    [Test]
+    procedure FindWhere_OneToMany_ReturnsChildList;
+
+    [Test]
+    procedure FindOneWhere_OneToOne_ReturnsProfile;
   end;
 
 implementation
@@ -114,6 +122,56 @@ begin
     Assert.AreEqual('alice@example.com', Found.Email);
   finally
     Found.Free;
+  end;
+end;
+
+procedure TAuroraDAOTests.FindWhere_OneToMany_ReturnsChildList;
+var
+  DAO: iAuroraDAO<TOrder>;
+  L: TObjectList<TOrder>;
+begin
+  FQuery.ResetDataSet;
+  FQuery.DefineField('id', ftInteger);
+  FQuery.DefineField('user_id', ftInteger);
+  FQuery.DefineField('total', ftFloat);
+  FQuery.AppendRow([1, 1, 100.0]);
+  FQuery.AppendRow([2, 1, 50.0]);
+  FQuery.AppendRow([3, 2, 25.0]);
+
+  DAO := TAuroraDAO<TOrder>.NewAurora(FQuery);
+  L := DAO.FindWhere('user_id', 1);
+  try
+    Assert.IsNotNull(L);
+    Assert.AreEqual(2, L.Count);
+    Assert.AreEqual(1, L[0].UserId);
+    Assert.AreEqual(1, L[0].Id);
+    Assert.AreEqual(1, L[1].UserId);
+    Assert.AreEqual(2, L[1].Id);
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TAuroraDAOTests.FindOneWhere_OneToOne_ReturnsProfile;
+var
+  DAO: iAuroraDAO<TProfile>;
+  P: TProfile;
+begin
+  FQuery.ResetDataSet;
+  FQuery.DefineField('id', ftInteger);
+  FQuery.DefineField('user_id', ftInteger);
+  FQuery.DefineField('bio', ftString);
+  FQuery.AppendRow([10, 1, 'bio alice']);
+
+  DAO := TAuroraDAO<TProfile>.NewAurora(FQuery);
+  P := DAO.FindOneWhere('user_id', 1);
+  try
+    Assert.IsNotNull(P);
+    Assert.AreEqual(10, P.Id);
+    Assert.AreEqual(1, P.UserId);
+    Assert.AreEqual('bio alice', P.Bio);
+  finally
+    P.Free;
   end;
 end;
 

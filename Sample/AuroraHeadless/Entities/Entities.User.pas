@@ -15,10 +15,13 @@ type
     FId: Integer;
 
     [NotNull]
+    [Format([2, 80])]
     [Campo('name')]
     FName: String;
 
     [NotNull]
+    [Email]
+    [Format([6, 255])]
     [Campo('email')]
     FEmail: String;
   public

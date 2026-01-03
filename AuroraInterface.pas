@@ -44,6 +44,8 @@ type
     {$IFNDEF CONSOLE}
     function BindForm(aForm : TForm)  : iAuroraDAO<T>;
     {$ENDIF}
+    function LoadOne<R: class, constructor>(var aEntity: T; const aLocalKey, aForeignKey: string; out aRelated: R): iAuroraDAO<T>;
+    function LoadMany<R: class, constructor>(var aEntity: T; const aLocalKey, aForeignKey: string; out aList: TObjectList<R>): iAuroraDAO<T>;
   end;
 
   iAuroraDAOSQLAttribute<T : class> = interface

@@ -1,6 +1,6 @@
 # AuroraHeadless Sample
 
-Exemplo minimalista (console) usando AuroraORM + FireDAC sem bind visual, com CRUD básico.
+Exemplo minimalista (console) usando AuroraORM + FireDAC sem bind visual, com CRUD básico e relacionamentos 1:1 e 1:N.
 
 ## Pré-requisitos
 - Delphi com FireDAC
@@ -12,7 +12,9 @@ Exemplo minimalista (console) usando AuroraORM + FireDAC sem bind visual, com CR
 
 ## Estrutura
 - `Entities/User.pas`: Entidade `TUser` mapeada para a tabela `users`.
-- `migrations/sqlite/`: Scripts `.sql` para criar tabelas/índices (opcional, se desejar usar migrations posteriormente).
+- `Entities/Order.pas`: Entidade `TOrder` (1:N) ligada a `users` por `user_id`.
+- `Entities/Profile.pas`: Entidade `TProfile` (1:1) ligada a `users` por `user_id`.
+- `migrations/sqlite/` e `migrations/postgres/`: Scripts `.sql` para criar tabelas/índices, incluindo `orders` e `profiles`.
 ## Como funciona
 1. Dialeto configurado para SQLite:
    ```pascal

@@ -18,6 +18,7 @@ type
     FQuery: TFDQuery;
     FParams: TParams;
     procedure SanitizeInputs;
+    procedure SyncParamsToFD;
   public
     constructor Create(aConnection: TFDConnection);
     destructor Destroy; override;
@@ -73,8 +74,7 @@ end;
 function TAuroraQueryFiredac.ExecSQL: iAuroraQuery;
 begin
   Result := Self;
-  if Assigned(FParams) then
-    FQuery.Params.Assign(FParams);
+  SyncParamsToFD;
   SanitizeInputs;
   FQuery.ExecSQL;
 end;
@@ -88,6 +88,7 @@ function TAuroraQueryFiredac.Open(aSQL: String): iAuroraQuery;
 begin
   Result := Self;
   FQuery.SQL.Text := aSQL;
+  SyncParamsToFD;
   SanitizeInputs;
   FQuery.Open;
 end;
@@ -95,8 +96,7 @@ end;
 function TAuroraQueryFiredac.Open: iAuroraQuery;
 begin
   Result := Self;
-  if Assigned(FParams) then
-    FQuery.Params.Assign(FParams);
+  SyncParamsToFD;
   SanitizeInputs;
   FQuery.Open;
 end;
@@ -123,6 +123,33 @@ begin
       if Pos(#0, S) > 0 then
         FQuery.Params[I].AsString := StringReplace(S, #0, '', [rfReplaceAll]);
     end;
+  end;
+end;
+
+procedure TAuroraQueryFiredac.SyncParamsToFD;
+var
+  I: Integer;
+  P: TParam;
+  FDPar: TFDParam;
+begin
+  if not Assigned(FParams) then Exit;
+  // Garante que parâmetros definidos em FParams existam em FQuery.Params (FireDAC)
+  for I := 0 to FParams.Count - 1 do
+  begin
+    P := FParams[I];
+    FDPar := FQuery.Params.FindParam(P.Name);
+    if FDPar = nil then
+    begin
+      FDPar := FQuery.Params.Add;
+      FDPar.Name := P.Name;
+      // Deixe FireDAC inferir tipos quando possível; ajuste básico:
+      case P.DataType of
+        ftUnknown: FDPar.DataType := ftUnknown;
+        else FDPar.DataType := P.DataType;
+      end;
+      FDPar.ParamType := ptInput;
+    end;
+    FDPar.Value := P.Value;
   end;
 end;
 

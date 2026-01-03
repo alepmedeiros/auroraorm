@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS orders (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  total NUMERIC(12,2) NOT NULL,
+  CONSTRAINT fk_orders_user FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS profiles (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL UNIQUE,
+  bio TEXT,
+  CONSTRAINT fk_profiles_user FOREIGN KEY(user_id) REFERENCES users(id)
+);

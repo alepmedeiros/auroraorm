@@ -7,7 +7,6 @@ uses
   System.Generics.Collections;
 
 type
-  // Entidade base nativa do AuroraORM, sem dependências do SimpleORM.
   // Mantemos mínima para permitir herança em entidades mapeadas.
   TAuroraEntity = class(TObject)
   public

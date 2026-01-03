@@ -20,15 +20,22 @@ type
   TAuroraJSON = class
   private
     class function SanitizeString(const S: string): string; static;
+    // Helpers para resolver nome e visibilidade no JSON a partir de atributos
+    class function GetJSONFieldNameFromProp(const Prop: TRttiProperty; out AName: string; const IncludeAutoInc, IncludeWithoutCampo: Boolean): Boolean; static;
+    class function GetJSONFieldNameFromField(const FieldRtti: TRttiField; out AName: string; const IncludeAutoInc, IncludeWithoutCampo: Boolean): Boolean; static;
   public
     // Entidade -> JSON (objeto)
     class function ToJSON<T: class, constructor>(const AEntity: T): string; static;
-    class procedure ToJSON<T: class, constructor>(const AEntity: T; var AJSON: string); static;
+    // Versão configurável: controla inclusão de AutoInc e de membros sem [Campo]
+    class function ToJSONWithOptions<T: class, constructor>(const AEntity: T; const IncludeAutoInc: Boolean = False; const IncludeNulls: Boolean = True; const IncludeWithoutCampo: Boolean = False): string; static;
     // Lista de entidades -> JSON (array)
     class function ToJSONArray<T: class, constructor>(const AList: TObjectList<T>): string; static;
+    // Versão configurável para arrays
+    class function ToJSONArrayWithOptions<T: class, constructor>(const AList: TObjectList<T>; const IncludeAutoInc: Boolean = False; const IncludeNulls: Boolean = True; const IncludeWithoutCampo: Boolean = False): string; static;
     // JSON (objeto) -> Entidade
     class function FromJSON<T: class, constructor>(const AJSON: string): T; static;
-    class procedure FromJSON<T: class, constructor>(const AJSON: string; var AEntity: T); static;
+    // Versão configurável: controla se aceita nomes sem [Campo] e atribuição em AutoInc
+    class function FromJSONWithOptions<T: class, constructor>(const AJSON: string; const AcceptWithoutCampo: Boolean = False; const AllowAutoIncAssign: Boolean = False): T; static;
     // JSON (array) -> Lista de entidades
     class function FromJSONArray<T: class, constructor>(const AJSON: string): TObjectList<T>; static;
   end;
@@ -41,15 +48,72 @@ begin
   Result := S.Replace(#0, '');
 end;
 
-class procedure TAuroraJSON.ToJSON<T>(const AEntity: T; var AJSON: string);
+class function TAuroraJSON.GetJSONFieldNameFromProp(const Prop: TRttiProperty; out AName: string; const IncludeAutoInc, IncludeWithoutCampo: Boolean): Boolean;
+var
+  Attr: TCustomAttribute;
+  HasIgnore, HasAutoInc: Boolean;
+begin
+  Result := False;
+  AName := '';
+  HasIgnore := False;
+  HasAutoInc := False;
+  for Attr in Prop.GetAttributes do
+  begin
+    if Attr is JsonIgnore then HasIgnore := True;
+    if Attr is AutoInc then HasAutoInc := True;
+    if (AName = '') and (Attr is JsonCampo) then AName := JsonCampo(Attr).Name;
+    if (AName = '') and (Attr is Campo) then AName := Campo(Attr).Name;
+  end;
+  if HasIgnore then Exit(False);
+  if HasAutoInc and not IncludeAutoInc then Exit(False);
+  if AName = '' then
+  begin
+    if IncludeWithoutCampo then
+      AName := Prop.Name
+    else
+      Exit(False);
+  end;
+  Result := True;
+end;
+
+class function TAuroraJSON.GetJSONFieldNameFromField(const FieldRtti: TRttiField; out AName: string; const IncludeAutoInc, IncludeWithoutCampo: Boolean): Boolean;
+var
+  Attr: TCustomAttribute;
+  HasIgnore, HasAutoInc: Boolean;
+begin
+  Result := False;
+  AName := '';
+  HasIgnore := False;
+  HasAutoInc := False;
+  for Attr in FieldRtti.GetAttributes do
+  begin
+    if Attr is JsonIgnore then HasIgnore := True;
+    if Attr is AutoInc then HasAutoInc := True;
+    if (AName = '') and (Attr is JsonCampo) then AName := JsonCampo(Attr).Name;
+    if (AName = '') and (Attr is Campo) then AName := Campo(Attr).Name;
+  end;
+  if HasIgnore then Exit(False);
+  if HasAutoInc and not IncludeAutoInc then Exit(False);
+  if AName = '' then
+  begin
+    if IncludeWithoutCampo then
+      AName := FieldRtti.Name
+    else
+      Exit(False);
+  end;
+  Result := True;
+end;
+
+class function TAuroraJSON.ToJSON<T>(const AEntity: T): string;
 var
   Dict: TDictionary<string, Variant>;
   Obj: TJSONObject;
   PairName: string;
   V: Variant;
+  NumExt: Extended;
 begin
   {$IFDEF USE_GBJSON}
-  TAuroraJSONGB.ToJSON<T>(AEntity, AJSON);
+  Result := TAuroraJSONGB.ToJSON<T>(AEntity);
   Exit;
   {$ENDIF}
   Obj := TJSONObject.Create;
@@ -62,10 +126,13 @@ begin
       if VarIsNull(V) then
         Obj.AddPair(PairName, TJSONNull.Create)
       else if VarIsNumeric(V) then
-        Obj.AddPair(PairName, TJSONNumber.Create(VarAsType(V, varDouble)))
+      begin
+        NumExt := VarAsType(V, varDouble);
+        Obj.AddPair(PairName, TJSONNumber.Create(NumExt));
+      end
       else if VarIsStr(V) then
         Obj.AddPair(PairName, TJSONString.Create(SanitizeString(VarToStr(V))))
-      else if VarIsBool(V) then
+      else if VarIsType(V, varBoolean) then
       begin
         if VarAsType(V, varBoolean) then
           Obj.AddPair(PairName, TJSONTrue.Create)
@@ -75,21 +142,14 @@ begin
       else
         Obj.AddPair(PairName, TJSONString.Create(VarToStr(V)));
     end;
-    AJSON := Obj.ToJSON;
+    Result := Obj.ToJSON;
   finally
     Dict.Free;
     Obj.Free;
   end;
 end;
 
-class function TAuroraJSON.ToJSON<T>(const AEntity: T): string;
-begin
-  {$IFDEF USE_GBJSON}
-  Result := TAuroraJSONGB.ToJSON<T>(AEntity);
-  Exit;
-  {$ENDIF}
-  ToJSON<T>(AEntity, Result);
-end;
+// (removido overload procedure; função acima contém a implementação)
 
 class function TAuroraJSON.ToJSONArray<T>(const AList: TObjectList<T>): string;
 var
@@ -115,20 +175,122 @@ begin
   end;
 end;
 
-class function TAuroraJSON.FromJSON<T>(const AJSON: string): T;
+class function TAuroraJSON.ToJSONWithOptions<T>(const AEntity: T; const IncludeAutoInc, IncludeNulls, IncludeWithoutCampo: Boolean): string;
+var
+  Obj: TJSONObject;
+  Ctx: TRttiContext;
+  Typ: TRttiType;
+  Prop: TRttiProperty;
+  FieldRtti: TRttiField;
+  Name: string;
+  V: TValue;
+  NumExt: Extended;
 begin
   {$IFDEF USE_GBJSON}
-  Result := TAuroraJSONGB.FromJSON<T>(AJSON);
+  Result := TAuroraJSONGB.ToJSON<T>(AEntity);
   Exit;
   {$ENDIF}
-  Result := nil;
-  FromJSON<T>(AJSON, Result);
+  Obj := TJSONObject.Create;
+  try
+    Ctx := TRttiContext.Create;
+    Typ := Ctx.GetType(TypeInfo(T));
+    // Propriedades
+    for Prop in Typ.GetProperties do
+    begin
+      if not GetJSONFieldNameFromProp(Prop, Name, IncludeAutoInc, IncludeWithoutCampo) then Continue;
+      if Assigned(AEntity) then
+        V := Prop.GetValue(TObject(AEntity))
+      else
+        V := TValue.Empty;
+      if V.IsEmpty or VarIsNull(V.AsVariant) then
+      begin
+        if IncludeNulls then
+          Obj.AddPair(Name, TJSONNull.Create);
+        Continue;
+      end;
+      if VarIsNumeric(V.AsVariant) then
+      begin
+        NumExt := VarAsType(V.AsVariant, varDouble);
+        Obj.AddPair(Name, TJSONNumber.Create(NumExt));
+      end
+      else if VarIsStr(V.AsVariant) then
+        Obj.AddPair(Name, TJSONString.Create(SanitizeString(V.ToString)))
+      else if VarIsType(V.AsVariant, varBoolean) then
+      begin
+        if VarAsType(V.AsVariant, varBoolean) then
+          Obj.AddPair(Name, TJSONTrue.Create)
+        else
+          Obj.AddPair(Name, TJSONFalse.Create);
+      end
+      else
+        Obj.AddPair(Name, TJSONString.Create(V.ToString));
+    end;
+    // Fields privados
+    for FieldRtti in Typ.GetFields do
+    begin
+      if not GetJSONFieldNameFromField(FieldRtti, Name, IncludeAutoInc, IncludeWithoutCampo) then Continue;
+      if Assigned(AEntity) then
+        V := FieldRtti.GetValue(TObject(AEntity))
+      else
+        V := TValue.Empty;
+      if V.IsEmpty or VarIsNull(V.AsVariant) then
+      begin
+        if IncludeNulls then
+          Obj.AddPair(Name, TJSONNull.Create);
+        Continue;
+      end;
+      if VarIsNumeric(V.AsVariant) then
+      begin
+        NumExt := VarAsType(V.AsVariant, varDouble);
+        Obj.AddPair(Name, TJSONNumber.Create(NumExt));
+      end
+      else if VarIsStr(V.AsVariant) then
+        Obj.AddPair(Name, TJSONString.Create(SanitizeString(V.ToString)))
+      else if VarIsType(V.AsVariant, varBoolean) then
+      begin
+        if VarAsType(V.AsVariant, varBoolean) then
+          Obj.AddPair(Name, TJSONTrue.Create)
+        else
+          Obj.AddPair(Name, TJSONFalse.Create);
+      end
+      else
+        Obj.AddPair(Name, TJSONString.Create(V.ToString));
+    end;
+    Result := Obj.ToJSON;
+  finally
+    Obj.Free;
+  end;
 end;
 
-class procedure TAuroraJSON.FromJSON<T>(const AJSON: string; var AEntity: T);
+class function TAuroraJSON.ToJSONArrayWithOptions<T>(const AList: TObjectList<T>; const IncludeAutoInc, IncludeNulls, IncludeWithoutCampo: Boolean): string;
+var
+  Arr: TJSONArray;
+  I: Integer;
+  ItemJSON: string;
+begin
+  {$IFDEF USE_GBJSON}
+  Result := TAuroraJSONGB.ToJSONArray<T>(AList);
+  Exit;
+  {$ENDIF}
+  Arr := TJSONArray.Create;
+  try
+    if Assigned(AList) then
+      for I := 0 to AList.Count - 1 do
+      begin
+        ItemJSON := ToJSONWithOptions<T>(AList.Items[I], IncludeAutoInc, IncludeNulls, IncludeWithoutCampo);
+        Arr.Add(TJSONObject.ParseJSONValue(ItemJSON) as TJSONObject);
+      end;
+    Result := Arr.ToJSON;
+  finally
+    Arr.Free;
+  end;
+end;
+
+class function TAuroraJSON.FromJSON<T>(const AJSON: string): T;
 var
   Typ: TRttiType;
   Prop: TRttiProperty;
+  FieldRtti: TRttiField;
   FieldName: string;
   Obj: TJSONObject;
   Val: TJSONValue;
@@ -139,18 +301,18 @@ var
   Attr: TCustomAttribute;
 begin
   {$IFDEF USE_GBJSON}
-  TAuroraJSONGB.FromJSON<T>(AJSON, AEntity);
+  Result := TAuroraJSONGB.FromJSON<T>(AJSON);
   Exit;
   {$ENDIF}
-  if not Assigned(AEntity) then
-    AEntity := T.Create;
+  Result := T.Create;
 
   Obj := TJSONObject.ParseJSONValue(SanitizeString(AJSON)) as TJSONObject;
   if not Assigned(Obj) then
-    Exit;
+    Exit(Result);
   try
     Ctx := TRttiContext.Create;
     Typ := Ctx.GetType(TypeInfo(T));
+    // Primeiro, atribui por propriedades com [Campo]
     for Prop in Typ.GetProperties do
     begin
       FieldName := '';
@@ -169,7 +331,7 @@ begin
             if Val is TJSONNumber then
             begin
               Num := TJSONNumber(Val);
-              Prop.SetValue(TObject(AEntity), Num.AsInt);
+              Prop.SetValue(TObject(Result), Num.AsInt);
             end;
           end;
         tkInt64:
@@ -177,7 +339,7 @@ begin
             if Val is TJSONNumber then
             begin
               Num := TJSONNumber(Val);
-              Prop.SetValue(TObject(AEntity), Round(Num.AsDouble));
+              Prop.SetValue(TObject(Result), Round(Num.AsDouble));
             end;
           end;
         tkFloat:
@@ -185,7 +347,7 @@ begin
             if Val is TJSONNumber then
             begin
               Num := TJSONNumber(Val);
-              Prop.SetValue(TObject(AEntity), Num.AsDouble);
+              Prop.SetValue(TObject(Result), Num.AsDouble);
             end
             else if Val is TJSONString then
             begin
@@ -198,9 +360,9 @@ begin
         tkString, tkUString, tkWString:
           begin
             if Val is TJSONString then
-              Prop.SetValue(TObject(AEntity), TJSONString(Val).Value)
+              Prop.SetValue(TObject(Result), TJSONString(Val).Value)
             else
-              Prop.SetValue(TObject(AEntity), Val.ToString);
+              Prop.SetValue(TObject(Result), Val.ToString);
           end;
         tkEnumeration:
           begin
@@ -208,7 +370,70 @@ begin
             else if Val is TJSONFalse then B := False
             else if Val is TJSONString then B := SameText(TJSONString(Val).Value, 'true')
             else B := Val.ToString = 'true';
-            Prop.SetValue(TObject(AEntity), B);
+            Prop.SetValue(TObject(Result), B);
+          end;
+      end;
+    end;
+
+    // Em seguida, atribui por fields (suporte a [Campo] aplicado nos fields privados)
+    for FieldRtti in Typ.GetFields do
+    begin
+      FieldName := '';
+      for Attr in FieldRtti.GetAttributes do
+        if Attr is Campo then
+        begin
+          FieldName := Campo(Attr).Name;
+          Break;
+        end;
+      if FieldName = '' then Continue;
+
+      Val := Obj.Values[FieldName];
+      if not Assigned(Val) then Continue;
+
+      case FieldRtti.FieldType.TypeKind of
+        tkInteger:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              FieldRtti.SetValue(TObject(Result), Num.AsInt);
+            end;
+          end;
+        tkInt64:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              FieldRtti.SetValue(TObject(Result), Round(Num.AsDouble));
+            end;
+          end;
+        tkFloat:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              FieldRtti.SetValue(TObject(Result), Num.AsDouble);
+            end
+            else if Val is TJSONString then
+            begin
+              S := TJSONString(Val).Value;
+              // se precisar, parse de datas pode ser tratado aqui
+            end;
+          end;
+        tkString, tkUString, tkWString:
+          begin
+            if Val is TJSONString then
+              FieldRtti.SetValue(TObject(Result), TJSONString(Val).Value)
+            else
+              FieldRtti.SetValue(TObject(Result), Val.ToString);
+          end;
+        tkEnumeration:
+          begin
+            if Val is TJSONTrue then B := True
+            else if Val is TJSONFalse then B := False
+            else if Val is TJSONString then B := SameText(TJSONString(Val).Value, 'true')
+            else B := Val.ToString = 'true';
+            FieldRtti.SetValue(TObject(Result), B);
           end;
       end;
     end;
@@ -216,6 +441,172 @@ begin
     Obj.Free;
   end;
 end;
+
+class function TAuroraJSON.FromJSONWithOptions<T>(const AJSON: string; const AcceptWithoutCampo, AllowAutoIncAssign: Boolean): T;
+var
+  Typ: TRttiType;
+  Prop: TRttiProperty;
+  FieldRtti: TRttiField;
+  Name: string;
+  Obj: TJSONObject;
+  Val: TJSONValue;
+  Num: TJSONNumber;
+  S: string;
+  Ctx: TRttiContext;
+  B: Boolean;
+  HasAutoInc: Boolean;
+begin
+  {$IFDEF USE_GBJSON}
+  Result := TAuroraJSONGB.FromJSON<T>(AJSON);
+  Exit;
+  {$ENDIF}
+  Result := T.Create;
+
+  Obj := TJSONObject.ParseJSONValue(SanitizeString(AJSON)) as TJSONObject;
+  if not Assigned(Obj) then
+    Exit(Result);
+  try
+    Ctx := TRttiContext.Create;
+    Typ := Ctx.GetType(TypeInfo(T));
+    // Propriedades
+    for Prop in Typ.GetProperties do
+    begin
+      Name := '';
+      HasAutoInc := False;
+      for var Attr in Prop.GetAttributes do
+      begin
+        if (Name = '') and (Attr is JsonCampo) then Name := JsonCampo(Attr).Name;
+        if (Name = '') and (Attr is Campo) then Name := Campo(Attr).Name;
+        if Attr is JsonIgnore then Name := ''; // força pular
+        if Attr is AutoInc then HasAutoInc := True;
+      end;
+      if (Name = '') and AcceptWithoutCampo then
+        Name := Prop.Name;
+      if Name = '' then Continue;
+      if HasAutoInc and not AllowAutoIncAssign then Continue;
+
+      Val := Obj.Values[Name];
+      if not Assigned(Val) then Continue;
+
+      case Prop.PropertyType.TypeKind of
+        tkInteger:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              Prop.SetValue(TObject(Result), Num.AsInt);
+            end;
+          end;
+        tkInt64:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              Prop.SetValue(TObject(Result), Round(Num.AsDouble));
+            end;
+          end;
+        tkFloat:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              Prop.SetValue(TObject(Result), Num.AsDouble);
+            end
+            else if Val is TJSONString then
+            begin
+              S := TJSONString(Val).Value;
+            end;
+          end;
+        tkString, tkUString, tkWString:
+          begin
+            if Val is TJSONString then
+              Prop.SetValue(TObject(Result), TJSONString(Val).Value)
+            else
+              Prop.SetValue(TObject(Result), Val.ToString);
+          end;
+        tkEnumeration:
+          begin
+            if Val is TJSONTrue then B := True
+            else if Val is TJSONFalse then B := False
+            else if Val is TJSONString then B := SameText(TJSONString(Val).Value, 'true')
+            else B := Val.ToString = 'true';
+            Prop.SetValue(TObject(Result), B);
+          end;
+      end;
+    end;
+
+    // Fields privados
+    for FieldRtti in Typ.GetFields do
+    begin
+      Name := '';
+      HasAutoInc := False;
+      for var Attr in FieldRtti.GetAttributes do
+      begin
+        if (Name = '') and (Attr is JsonCampo) then Name := JsonCampo(Attr).Name;
+        if (Name = '') and (Attr is Campo) then Name := Campo(Attr).Name;
+        if Attr is JsonIgnore then Name := ''; // pular
+        if Attr is AutoInc then HasAutoInc := True;
+      end;
+      if (Name = '') and AcceptWithoutCampo then
+        Name := FieldRtti.Name;
+      if Name = '' then Continue;
+      if HasAutoInc and not AllowAutoIncAssign then Continue;
+
+      Val := Obj.Values[Name];
+      if not Assigned(Val) then Continue;
+
+      case FieldRtti.FieldType.TypeKind of
+        tkInteger:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              FieldRtti.SetValue(TObject(Result), Num.AsInt);
+            end;
+          end;
+        tkInt64:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              FieldRtti.SetValue(TObject(Result), Round(Num.AsDouble));
+            end;
+          end;
+        tkFloat:
+          begin
+            if Val is TJSONNumber then
+            begin
+              Num := TJSONNumber(Val);
+              FieldRtti.SetValue(TObject(Result), Num.AsDouble);
+            end
+            else if Val is TJSONString then
+            begin
+              S := TJSONString(Val).Value;
+            end;
+          end;
+        tkString, tkUString, tkWString:
+          begin
+            if Val is TJSONString then
+              FieldRtti.SetValue(TObject(Result), TJSONString(Val).Value)
+            else
+              FieldRtti.SetValue(TObject(Result), Val.ToString);
+          end;
+        tkEnumeration:
+          begin
+            if Val is TJSONTrue then B := True
+            else if Val is TJSONFalse then B := False
+            else if Val is TJSONString then B := SameText(TJSONString(Val).Value, 'true')
+            else B := Val.ToString = 'true';
+            FieldRtti.SetValue(TObject(Result), B);
+          end;
+      end;
+    end;
+  finally
+    Obj.Free;
+  end;
+end;
+
+// (removido overload procedure; função acima contém a implementação)
 
 class function TAuroraJSON.FromJSONArray<T>(const AJSON: string): TObjectList<T>;
 var

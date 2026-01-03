@@ -4,14 +4,15 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Generics.Collections, System.IOUtils,
-  SimpleInterface, SimpleConfig;
+  Data.DB,
+  AuroraInterface, AuroraConfig;
 
 type
   EAuroraMigrationError = class(Exception);
 
   TAuroraMigrationRunner = class
   private
-    FQuery: iSimpleQuery;
+    FQuery: iAuroraQuery;
     FMigrationsPath: String;
     function EnsureMigrationsTableSQL: String;
     function InsertVersionSQL(const Version: Int64): String;
@@ -21,7 +22,7 @@ type
     procedure CommitTransaction;
     procedure RollbackTransaction;
   public
-    constructor Create(const aQuery: iSimpleQuery; const aPath: String);
+    constructor Create(const aQuery: iAuroraQuery; const aPath: String);
     procedure ApplyPending;
   end;
 
@@ -49,7 +50,7 @@ end;
 
 { TAuroraMigrationRunner }
 
-constructor TAuroraMigrationRunner.Create(const aQuery: iSimpleQuery; const aPath: String);
+constructor TAuroraMigrationRunner.Create(const aQuery: iAuroraQuery; const aPath: String);
 begin
   FQuery := aQuery;
   FMigrationsPath := aPath;
@@ -57,7 +58,7 @@ end;
 
 function TAuroraMigrationRunner.EnsureMigrationsTableSQL: String;
 begin
-  case TSimpleConfig.Dialect of
+  case TAuroraConfig.Dialect of
     dbPostgreSQL:
       Result := 'CREATE TABLE IF NOT EXISTS schema_migrations (' +
                 '  version BIGINT PRIMARY KEY,' +
@@ -78,7 +79,7 @@ end;
 
 function TAuroraMigrationRunner.InsertVersionSQL(const Version: Int64): String;
 begin
-  case TSimpleConfig.Dialect of
+  case TAuroraConfig.Dialect of
     dbPostgreSQL:
       Result := 'INSERT INTO schema_migrations(version, applied_at) VALUES (:v, now())';
     dbSQLite:
@@ -95,13 +96,13 @@ end;
 
 procedure TAuroraMigrationRunner.ExecStatement(const SQL: String);
 begin
-  FQuery.SQL(SQL);
+  FQuery.SQL.Text := SQL;
   FQuery.ExecSQL;
 end;
 
 procedure TAuroraMigrationRunner.BeginTransaction;
 begin
-  case TSimpleConfig.Dialect of
+  case TAuroraConfig.Dialect of
     dbPostgreSQL, dbSQLite:
       ExecStatement('BEGIN');
   else
@@ -125,7 +126,7 @@ var
   FileName: String;
   VersionsApplied: TList<Int64>;
   Pending: TList<String>;
-  DS: iSimpleQuery;
+  // removed legacy DS interface usage
   Version: Int64;
   SQLText, Statement: String;
   Lines: TStringList;
@@ -137,13 +138,12 @@ begin
   // Load applied versions
   VersionsApplied := TList<Int64>.Create;
   try
-    FQuery.SQL(SelectAppliedSQL);
+    FQuery.SQL.Text := SelectAppliedSQL;
     FQuery.Open;
-    DS := FQuery;
-    while not DS.DataSet.Eof do
+    while not FQuery.DataSet.Eof do
     begin
-      VersionsApplied.Add(DS.DataSet.FieldByName('version').AsLargeInt);
-      DS.DataSet.Next;
+      VersionsApplied.Add(FQuery.DataSet.FieldByName('version').AsLargeInt);
+      FQuery.DataSet.Next;
     end;
 
     // Collect migration files
@@ -194,9 +194,11 @@ begin
               ExecStatement(Statement);
 
             // Record version
-            FQuery.SQL(InsertVersionSQL(Version));
+            FQuery.SQL.Text := InsertVersionSQL(Version);
             FQuery.Params.Clear;
-            FQuery.Params.Add('v', Version);
+            if FQuery.Params.FindParam('v') = nil then
+              FQuery.Params.CreateParam(ftLargeint, 'v', ptInput);
+            FQuery.Params.ParamByName('v').AsLargeInt := Version;
             FQuery.ExecSQL;
             CommitTransaction;
           except

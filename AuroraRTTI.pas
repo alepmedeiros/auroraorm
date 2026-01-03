@@ -127,6 +127,7 @@ function TAuroraRTTI<T>.DictionaryFields(var aDictionary: TDictionary<string, va
 var
   Typ: TRttiType;
   Prop: TRttiProperty;
+  FieldRtti: TRttiField;
   FieldName: string;
   V: TValue;
 begin
@@ -137,7 +138,7 @@ begin
   for Prop in Typ.GetProperties do
   begin
     // Ignore/AutoInc skip
-    if HasAttribute<Ignore>(Prop.GetAttributes) or HasAttribute<AutoInc>(Prop.GetAttributes) then
+    if HasAttribute<Ignore>(Prop.GetAttributes) or HasAttribute<JsonIgnore>(Prop.GetAttributes) or HasAttribute<AutoInc>(Prop.GetAttributes) then
       Continue;
     FieldName := PropertyFieldName(Prop);
     if FieldName = '' then
@@ -145,6 +146,28 @@ begin
     if Assigned(FInstance) then
     begin
       V := Prop.GetValue(TObject(FInstance));
+      aDictionary.AddOrSetValue(FieldName, V.AsVariant);
+    end
+    else
+      aDictionary.AddOrSetValue(FieldName, Null);
+  end;
+  // Suporte a atributos aplicados diretamente nos fields privados
+  for FieldRtti in Typ.GetFields do
+  begin
+    if HasAttribute<Ignore>(FieldRtti.GetAttributes) or HasAttribute<JsonIgnore>(FieldRtti.GetAttributes) or HasAttribute<AutoInc>(FieldRtti.GetAttributes) then
+      Continue;
+    FieldName := '';
+    for var Attr in FieldRtti.GetAttributes do
+      if Attr is Campo then
+      begin
+        FieldName := Campo(Attr).Name;
+        Break;
+      end;
+    if FieldName = '' then
+      Continue;
+    if Assigned(FInstance) then
+    begin
+      V := FieldRtti.GetValue(TObject(FInstance));
       aDictionary.AddOrSetValue(FieldName, V.AsVariant);
     end
     else
@@ -219,7 +242,7 @@ begin
     FieldName := PropertyFieldName(Prop);
     if FieldName = '' then
       Continue;
-    aUpdate := aUpdate + Format('%s = :%s, ', [FieldName, FieldName]);
+    aUpdate := aUpdate + System.SysUtils.Format('%s = :%s, ', [FieldName, FieldName]);
   end;
   if aUpdate <> '' then
     aUpdate := Copy(aUpdate, 1, Length(aUpdate) - 2) + ' ';
@@ -243,7 +266,7 @@ begin
       begin
         FieldName := PropertyFieldName(Prop);
         if FieldName = '' then FieldName := Prop.Name;
-        aWhere := aWhere + Format('%s = :%s AND ', [FieldName, FieldName]);
+        aWhere := aWhere + System.SysUtils.Format('%s = :%s AND ', [FieldName, FieldName]);
         Break;
       end;
   end;

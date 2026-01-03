@@ -9,7 +9,8 @@ uses
   DUnitX.Loggers.XML.NUnit,
   Aurora.Test.DAO in 'Aurora.Test.DAO.pas',
   Aurora.Test.JSON in 'Aurora.Test.JSON.pas',
-  AuroraMock.SimpleQuery in 'AuroraMock.SimpleQuery.pas';
+  Aurora.Test.SQL in 'Aurora.Test.SQL.pas',
+  AuroraMock.Query in 'AuroraMock.Query.pas';
 
 var
   runner : ITestRunner;
