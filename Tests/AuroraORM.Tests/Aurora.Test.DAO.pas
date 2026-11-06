@@ -5,6 +5,7 @@ interface
 uses
   DUnitX.TestFramework,
   System.SysUtils,
+  System.Generics.Collections,
   Data.DB,
   AuroraConfig,
   AuroraDAO,
@@ -49,7 +50,7 @@ uses
 procedure TAuroraDAOTests.Setup;
 begin
   // Dialeto padrão para os testes
-  TAuroraConfig.Dialect := dbSQLite;
+  TAuroraConfig.SetDialect(dbSQLite);
   FQuery := TAuroraMockQuery.Create;
 end;
 
@@ -95,7 +96,7 @@ procedure TAuroraDAOTests.LastRecord_SQL_UsesLimit1_ForSQLite;
 var
   DAO: iAuroraDAO<TUser>;
 begin
-  TAuroraConfig.Dialect := dbSQLite;
+  TAuroraConfig.SetDialect(dbSQLite);
   DAO := TAuroraDAO<TUser>.NewAurora(FQuery);
   DAO.LastRecord;
   Assert.IsTrue(Pos('limit 1', LowerCase(FQuery.SQL.Text)) > 0, 'SQLite deve usar LIMIT 1');

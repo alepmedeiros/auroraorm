@@ -29,6 +29,12 @@ type
     function DataSet: TDataSet;
     function Open(aSQL: String): iAuroraQuery; overload;
     function Open: iAuroraQuery; overload;
+    function RowsAffected: Integer;
+    function Clone: iAuroraQuery;
+    function StartTransaction: iAuroraQuery;
+    function Commit: iAuroraQuery;
+    function Rollback: iAuroraQuery;
+    function InTransaction: Boolean;
   end;
 
 implementation
@@ -76,7 +82,13 @@ begin
   Result := Self;
   SyncParamsToFD;
   SanitizeInputs;
-  FQuery.ExecSQL;
+  try
+    FQuery.ExecSQL;
+  except
+    if InTransaction then
+      Rollback;
+    raise;
+  end;
 end;
 
 function TAuroraQueryFiredac.DataSet: TDataSet;
@@ -124,6 +136,42 @@ begin
         FQuery.Params[I].AsString := StringReplace(S, #0, '', [rfReplaceAll]);
     end;
   end;
+end;
+
+function TAuroraQueryFiredac.RowsAffected: Integer;
+begin
+  Result := FQuery.RowsAffected;
+end;
+
+function TAuroraQueryFiredac.Clone: iAuroraQuery;
+begin
+  Result := TAuroraQueryFiredac.New(FConnection);
+end;
+
+function TAuroraQueryFiredac.StartTransaction: iAuroraQuery;
+begin
+  Result := Self;
+  if not FConnection.InTransaction then
+    FConnection.StartTransaction;
+end;
+
+function TAuroraQueryFiredac.Commit: iAuroraQuery;
+begin
+  Result := Self;
+  if FConnection.InTransaction then
+    FConnection.Commit;
+end;
+
+function TAuroraQueryFiredac.Rollback: iAuroraQuery;
+begin
+  Result := Self;
+  if FConnection.InTransaction then
+    FConnection.Rollback;
+end;
+
+function TAuroraQueryFiredac.InTransaction: Boolean;
+begin
+  Result := Assigned(FConnection) and FConnection.InTransaction;
 end;
 
 procedure TAuroraQueryFiredac.SyncParamsToFD;

@@ -9,11 +9,24 @@ uses
   System.Generics.Collections,
   System.Variants,
   Data.DB,
+  {$IFNDEF CONSOLE}
+    {$IFDEF FMX}
+      FMX.Forms,
+    {$ELSE}
+      Vcl.Forms,
+    {$ENDIF}
+  {$ENDIF}
   AuroraInterface,
   AuroraAttributes,
+  AuroraMetadata,
   AuroraConfig;
 
 type
+  // Levantada por Update quando a entidade usa [Version] e o UPDATE afeta 0
+  // linhas - sinal de que outra transacao alterou (ou removeu) o registro
+  // entre a leitura e esta escrita (analogo a OptimisticLockException do JPA).
+  EAuroraOptimisticLockError = class(Exception);
+
   TAuroraDAOSQLAttribute<T: class, constructor> = class(TInterfacedObject, iAuroraDAOSQLAttribute<T>)
   private
     FOwner: TObject; // referência fraca ao DAO para evitar ciclo de interfaces
@@ -43,18 +56,15 @@ type
     FQuery: iAuroraQuery;
     FDataSource: TDataSource;
     FSQLAttr: iAuroraDAOSQLAttribute<T>;
-    FRttiContext: TRttiContext;
-    function GetLocalValue(const AEntity: T; const ALocalKey: string; out V: Variant): Boolean;
+    FMeta: TAuroraEntityMeta;
   private
     function QualifiedTableName(const ATable: string): string;
-    function RTTIType: TRttiType;
-    function TableName: string;
-    function PKFieldName: string;
     procedure BuildInsertParts(out FieldsCSV, ParamsCSV: string);
     procedure AssignParamsFromEntity(const AEntity: T);
     procedure AssignParam(const AName: string; const AValue: Variant);
-    function NewInstance: T;
+    function NewEntityInstance: T;
     procedure MapDataSetToEntity(ADataset: TDataSet; var AEntity: T);
+    procedure PopulateEagerRelations(AEntity: T);
   public
     constructor Create(aQuery: iAuroraQuery);
     destructor Destroy; override;
@@ -84,8 +94,6 @@ type
     {$IFNDEF CONSOLE}
     function BindForm(aForm: TForm): iAuroraDAO<T>;
     {$ENDIF}
-    function LoadOne<R: class, constructor>(var aEntity: T; const aLocalKey, aForeignKey: string; out aRelated: R): iAuroraDAO<T>;
-    function LoadMany<R: class, constructor>(var aEntity: T; const aLocalKey, aForeignKey: string; out aList: TObjectList<R>): iAuroraDAO<T>;
   end;
 
 implementation
@@ -177,13 +185,12 @@ begin
   inherited Create;
   FQuery := aQuery;
   FSQLAttr := TAuroraDAOSQLAttribute<T>.Create(Self);
-  FRttiContext := TRttiContext.Create;
+  FMeta := TAuroraMetadataRegistry.GetOrBuild<T>;
 end;
 
 destructor TAuroraDAO<T>.Destroy;
 begin
   FSQLAttr := nil; // interface: libera por contagem de referência
-  FRttiContext.Free;
   inherited;
 end;
 
@@ -205,114 +212,16 @@ begin
     Result := ATable;
 end;
 
-function TAuroraDAO<T>.RTTIType: TRttiType;
-begin
-  Result := FRttiContext.GetType(TypeInfo(T));
-end;
-
-function TAuroraDAO<T>.TableName: string;
-var
-  Typ: TRttiType;
-  Attr: TCustomAttribute;
-  Base: string;
-begin
-  Result := '';
-  Typ := RTTIType;
-  for Attr in Typ.GetAttributes do
-    if Attr is Tabela then
-      Exit(Tabela(Attr).Name);
-  // fallback
-  Base := Typ.Name;
-  if (Length(Base) > 0) and (Base[1] = 'T') then
-    Base := Copy(Base, 2, Length(Base) - 1);
-  Base := LowerCase(Base);
-  if (Length(Base) = 0) then
-    Result := LowerCase(Typ.Name)
-  else if (Base[Length(Base)] <> 's') then
-    Result := Base + 's'
-  else
-    Result := Base;
-end;
-
-function TAuroraDAO<T>.PKFieldName: string;
-var
-  Typ: TRttiType;
-  Prop: TRttiProperty;
-  Attr: TCustomAttribute;
-  InnerAttr: TCustomAttribute;
-  FieldName: string;
-begin
-  Result := 'id';
-  Typ := RTTIType;
-  for Prop in Typ.GetProperties do
-  begin
-    for Attr in Prop.GetAttributes do
-    begin
-      if Attr is PK then
-      begin
-        // Se houver [Campo], usa o nome do campo; caso contrário, usa o nome da propriedade
-        FieldName := '';
-        for InnerAttr in Prop.GetAttributes do
-          if InnerAttr is Campo then
-            FieldName := Campo(InnerAttr).Name;
-        if FieldName <> '' then
-          Exit(FieldName)
-        else
-          Exit(Prop.Name);
-      end;
-    end;
-  end;
-end;
-
 procedure TAuroraDAO<T>.BuildInsertParts(out FieldsCSV, ParamsCSV: string);
 var
-  Typ: TRttiType;
-  Prop: TRttiProperty;
-  FieldRtti: TRttiField;
-  HasIgnore, HasAutoInc: Boolean;
-  Attr: TCustomAttribute;
-  FieldName: string;
+  F: TAuroraFieldMeta;
 begin
   FieldsCSV := '';
   ParamsCSV := '';
-  Typ := RTTIType;
-  if Typ = nil then Exit;
-  for Prop in Typ.GetProperties do
+  for F in FMeta.InsertableFields do
   begin
-    HasIgnore := False;
-    HasAutoInc := False;
-    FieldName := '';
-    for Attr in Prop.GetAttributes do
-    begin
-      if Attr is Ignore then HasIgnore := True;
-      if Attr is AutoInc then HasAutoInc := True;
-      if Attr is Campo then FieldName := Campo(Attr).Name;
-    end;
-    if HasIgnore or HasAutoInc then
-      Continue;
-    if FieldName = '' then
-      Continue;
-    FieldsCSV := FieldsCSV + FieldName + ', ';
-    ParamsCSV := ParamsCSV + ':' + FieldName + ', ';
-  end;
-  // Também suporta atributos em fields (ex.: [Campo] no FId/FName/FEmail)
-  for FieldRtti in Typ.GetFields do
-  begin
-    HasIgnore := False;
-    HasAutoInc := False;
-    FieldName := '';
-    for Attr in FieldRtti.GetAttributes do
-    begin
-      if Attr is Ignore then HasIgnore := True;
-      if Attr is AutoInc then HasAutoInc := True;
-      if Attr is Campo then FieldName := Campo(Attr).Name;
-    end;
-    if HasIgnore or HasAutoInc then
-      Continue;
-    if FieldName = '' then
-      Continue;
-    FieldsCSV := FieldsCSV + FieldName + ', ';
-    ParamsCSV := ParamsCSV + ':' + FieldName + ', ';
+    FieldsCSV := FieldsCSV + F.FieldName + ', ';
+    ParamsCSV := ParamsCSV + ':' + F.FieldName + ', ';
   end;
   if FieldsCSV <> '' then
     FieldsCSV := Copy(FieldsCSV, 1, Length(FieldsCSV) - 2);
@@ -322,53 +231,10 @@ end;
 
 procedure TAuroraDAO<T>.AssignParamsFromEntity(const AEntity: T);
 var
-  Typ: TRttiType;
-  Prop: TRttiProperty;
-  FieldRtti: TRttiField;
-  Attr: TCustomAttribute;
-  FieldName: string;
-  HasIgnore, HasAutoInc: Boolean;
-  V: TValue;
+  F: TAuroraFieldMeta;
 begin
-  Typ := RTTIType;
-  if Typ = nil then Exit;
-  for Prop in Typ.GetProperties do
-  begin
-    FieldName := '';
-    HasIgnore := False;
-    HasAutoInc := False;
-    for Attr in Prop.GetAttributes do
-    begin
-      if Attr is Ignore then HasIgnore := True;
-      if Attr is AutoInc then HasAutoInc := True;
-      if Attr is Campo then FieldName := Campo(Attr).Name;
-    end;
-    if HasIgnore or HasAutoInc then
-      Continue;
-    if FieldName = '' then
-      Continue;
-    V := Prop.GetValue(TObject(AEntity));
-    AssignParam(FieldName, V.AsVariant);
-  end;
-  // Também suporta atributos em fields
-  for FieldRtti in Typ.GetFields do
-  begin
-    FieldName := '';
-    HasIgnore := False;
-    HasAutoInc := False;
-    for Attr in FieldRtti.GetAttributes do
-    begin
-      if Attr is Ignore then HasIgnore := True;
-      if Attr is AutoInc then HasAutoInc := True;
-      if Attr is Campo then FieldName := Campo(Attr).Name;
-    end;
-    if HasIgnore or HasAutoInc then
-      Continue;
-    if FieldName = '' then
-      Continue;
-    V := FieldRtti.GetValue(TObject(AEntity));
-    AssignParam(FieldName, V.AsVariant);
-  end;
+  for F in FMeta.InsertableFields do
+    AssignParam(F.FieldName, F.GetValue(TObject(AEntity)).AsVariant);
 end;
 
 procedure TAuroraDAO<T>.AssignParam(const AName: string; const AValue: Variant);
@@ -382,37 +248,25 @@ begin
   P.Value := AValue;
 end;
 
-function TAuroraDAO<T>.NewInstance: T;
+function TAuroraDAO<T>.NewEntityInstance: T;
 begin
   Result := T.Create;
 end;
 
 procedure TAuroraDAO<T>.MapDataSetToEntity(ADataset: TDataSet; var AEntity: T);
 var
-  Typ: TRttiType;
-  Prop: TRttiProperty;
-  FieldRtti: TRttiField;
-  Attr: TCustomAttribute;
-  FieldName: string;
+  F: TAuroraFieldMeta;
   Field: TField;
   V: TValue;
 begin
   if not Assigned(AEntity) then
-    AEntity := NewInstance;
-  Typ := RTTIType;
-  if Typ = nil then Exit;
-  for Prop in Typ.GetProperties do
+    AEntity := NewEntityInstance;
+  for F in FMeta.Fields do
   begin
-    FieldName := '';
-    for Attr in Prop.GetAttributes do
-      if Attr is Campo then
-        FieldName := Campo(Attr).Name;
-    if FieldName = '' then
-      Continue;
-    Field := ADataset.FieldByName(FieldName);
+    Field := ADataset.FindField(F.FieldName);
     if not Assigned(Field) then
       Continue;
-    case Prop.PropertyType.TypeKind of
+    case F.TypeKind of
       tkInteger: V := Field.AsInteger;
       tkInt64: V := Field.AsLargeInt;
       tkFloat: V := Field.AsFloat;
@@ -422,38 +276,53 @@ begin
         V := TValue.Empty;
     end;
     if not V.IsEmpty then
-      Prop.SetValue(TObject(AEntity), V);
+      F.SetValue(TObject(AEntity), V);
   end;
-  // Também suporta atributos em fields
-  for FieldRtti in Typ.GetFields do
+  PopulateEagerRelations(AEntity);
+end;
+
+procedure TAuroraDAO<T>.PopulateEagerRelations(AEntity: T);
+var
+  Rel: TAuroraRelationMeta;
+  LocalField: TAuroraFieldMeta;
+  TargetClass: TClass;
+  TargetMeta: TAuroraEntityMeta;
+  SubQuery: iAuroraQuery;
+  LocalValue: Variant;
+  Related: TObject;
+  V: TValue;
+begin
+  if not Assigned(AEntity) then
+    Exit;
+  for Rel in FMeta.Relations do
   begin
-    FieldName := '';
-    for Attr in FieldRtti.GetAttributes do
-      if Attr is Campo then
-        FieldName := Campo(Attr).Name;
-    if FieldName = '' then
+    if not (Rel.Kind in [rkHasOne, rkBelongsTo]) then
+      Continue; // HasMany/BelongsToMany sao lazy - ver AuroraRelations.LoadMany<R>
+    TargetClass := Rel.ResolveTargetClass;
+    if TargetClass = nil then
+      Continue; // entidade relacionada ainda nao foi vinculada em RTTI (unit nao usada no escopo)
+    TargetMeta := TAuroraMetadataRegistry.GetOrBuildByTypeInfo(TargetClass.ClassInfo);
+    LocalField := FMeta.FieldByColumn(Rel.LocalKey);
+    if LocalField = nil then
       Continue;
-    Field := ADataset.FieldByName(FieldName);
-    if not Assigned(Field) then
+    LocalValue := LocalField.GetValue(TObject(AEntity)).AsVariant;
+    if VarIsNull(LocalValue) or VarIsEmpty(LocalValue) then
       Continue;
-    // Mapeia usando o tipo de destino (FieldRtti.FieldType), garantindo conversão correta
-    case FieldRtti.FieldType.TypeKind of
-      tkInteger:
-        V := TValue.From<Integer>(Field.AsInteger);
-      tkInt64:
-        V := TValue.From<Int64>(Field.AsLargeInt);
-      tkFloat:
-        V := TValue.From<Double>(Field.AsFloat);
-      tkString, tkUString, tkWString:
-        V := TValue.From<string>(Field.AsString);
-      tkEnumeration:
-        // Suporta booleanos simples
-        V := TValue.From<Boolean>(Field.AsBoolean);
-      else
-        V := TValue.Empty;
+
+    SubQuery := FQuery.Clone;
+    SubQuery.SQL.Text := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s',
+      [QualifiedTableName(TargetMeta.TableName), Rel.ForeignKey, Rel.ForeignKey]);
+    SubQuery.Params.CreateParam(ftUnknown, Rel.ForeignKey, ptInput).Value := LocalValue;
+    SubQuery.Open;
+    if not SubQuery.DataSet.Eof then
+    begin
+      // Apenas um nivel de profundidade: o mapeamento aqui e puramente por coluna,
+      // sem recursao em PopulateEagerRelations do lado relacionado (evita ciclos
+      // em relacionamentos bidirecionais, ex.: User HasOne Profile / Profile BelongsTo User).
+      Related := AuroraMapDataSetToInstance(TargetMeta, SubQuery.DataSet);
+      TValue.Make(@Related, Rel.RttiProp.PropertyType.Handle, V);
+      Rel.RttiProp.SetValue(TObject(AEntity), V);
     end;
-    if not V.IsEmpty then
-      FieldRtti.SetValue(TObject(AEntity), V);
   end;
 end;
 
@@ -463,7 +332,7 @@ var
   Entity: T;
 begin
   Result := Self;
-  Entity := NewInstance;
+  Entity := NewEntityInstance;
   try
     Insert(Entity);
   finally
@@ -490,7 +359,7 @@ var
 begin
   Result := Self;
   BuildInsertParts(FieldsCSV, ParamsCSV);
-  SQLText := System.SysUtils.Format('INSERT INTO %s (%s) VALUES (%s)', [QualifiedTableName(TableName), FieldsCSV, ParamsCSV]);
+  SQLText := System.SysUtils.Format('INSERT INTO %s (%s) VALUES (%s)', [QualifiedTableName(FMeta.TableName), FieldsCSV, ParamsCSV]);
   FQuery.SQL.Text := SQLText;
   AssignParamsFromEntity(aValue);
   FQuery.ExecSQL;
@@ -499,54 +368,94 @@ end;
 function TAuroraDAO<T>.Update(var aValue: T): iAuroraDAO<T>;
 var
   SetExpr, WhereExpr, SQLText: string;
+  F: TAuroraFieldMeta;
+  OldVersion: TValue;
+  NewVersion: TValue;
 begin
   Result := Self;
   SetExpr := '';
+  for F in FMeta.UpdatableFields do
+  begin
+    if F = FMeta.VersionField then
+      Continue; // versao e incrementada explicitamente abaixo, nunca via valor do chamador
+    SetExpr := SetExpr + System.SysUtils.Format('%s = :%s, ', [F.FieldName, F.FieldName]);
+  end;
+  if Assigned(FMeta.VersionField) then
+    SetExpr := SetExpr + System.SysUtils.Format('%s = %s + 1, ', [FMeta.VersionField.FieldName, FMeta.VersionField.FieldName]);
+  if SetExpr <> '' then
+    SetExpr := Copy(SetExpr, 1, Length(SetExpr) - 2);
+
   WhereExpr := '';
-  TAuroraRTTI<T>.New(nil).Update(SetExpr);
-  TAuroraRTTI<T>.New(nil).Where(WhereExpr);
-  SQLText := System.SysUtils.Format('UPDATE %s SET %s WHERE %s', [QualifiedTableName(TableName), Trim(SetExpr), Trim(WhereExpr)]);
+  for F in FMeta.PKFields do
+    WhereExpr := WhereExpr + System.SysUtils.Format('%s = :%s AND ', [F.FieldName, F.FieldName]);
+  if Assigned(FMeta.VersionField) then
+    WhereExpr := WhereExpr + System.SysUtils.Format('%s = :%s AND ', [FMeta.VersionField.FieldName, FMeta.VersionField.FieldName]);
+  if WhereExpr <> '' then
+    WhereExpr := Copy(WhereExpr, 1, Length(WhereExpr) - 5);
+
+  if WhereExpr <> '' then
+    SQLText := System.SysUtils.Format('UPDATE %s SET %s WHERE %s', [QualifiedTableName(FMeta.TableName), SetExpr, WhereExpr])
+  else
+    SQLText := System.SysUtils.Format('UPDATE %s SET %s', [QualifiedTableName(FMeta.TableName), SetExpr]);
+
   FQuery.SQL.Text := SQLText;
   AssignParamsFromEntity(aValue);
+  for F in FMeta.PKFields do
+    AssignParam(F.FieldName, F.GetValue(TObject(aValue)).AsVariant);
+  if Assigned(FMeta.VersionField) then
+  begin
+    OldVersion := FMeta.VersionField.GetValue(TObject(aValue));
+    AssignParam(FMeta.VersionField.FieldName, OldVersion.AsVariant);
+  end;
+
   FQuery.ExecSQL;
+
+  if Assigned(FMeta.VersionField) then
+  begin
+    if FQuery.RowsAffected = 0 then
+      raise EAuroraOptimisticLockError.CreateFmt(
+        'Registro de %s (versao %s) foi alterado por outra transacao antes deste UPDATE.',
+        [FMeta.TableName, OldVersion.ToString]);
+    // Mantem a entidade em memoria sincronizada com o novo valor de versao no banco.
+    NewVersion := TValue.FromOrdinal(FMeta.VersionField.RttiType.Handle, OldVersion.AsOrdinal + 1);
+    FMeta.VersionField.SetValue(TObject(aValue), NewVersion);
+  end;
 end;
 
 function TAuroraDAO<T>.Delete(aValue: T): iAuroraDAO<T>;
 var
   WhereExpr, SQLText: string;
-  PKField: string;
-  Typ: TRttiType;
-  Prop: TRttiProperty;
-  Attr: TCustomAttribute;
-  CampoName: string;
-  V: TValue;
+  F: TAuroraFieldMeta;
 begin
   Result := Self;
   WhereExpr := '';
-  TAuroraRTTI<T>.New(nil).Where(WhereExpr);
-  SQLText := System.SysUtils.Format('DELETE FROM %s WHERE %s', [QualifiedTableName(TableName), Trim(WhereExpr)]);
+  for F in FMeta.PKFields do
+    WhereExpr := WhereExpr + System.SysUtils.Format('%s = :%s AND ', [F.FieldName, F.FieldName]);
+  if WhereExpr <> '' then
+    WhereExpr := Copy(WhereExpr, 1, Length(WhereExpr) - 5);
+
+  SQLText := System.SysUtils.Format('DELETE FROM %s WHERE %s', [QualifiedTableName(FMeta.TableName), WhereExpr]);
   FQuery.SQL.Text := SQLText;
-  PKField := PKFieldName;
-  Typ := RTTIType;
-  for Prop in Typ.GetProperties do
-  begin
-    CampoName := '';
-    for Attr in Prop.GetAttributes do
-      if Attr is Campo then CampoName := Campo(Attr).Name;
-    if (CampoName = PKField) or SameText(Prop.Name, PKField) then
-    begin
-      V := Prop.GetValue(TObject(aValue));
-      AssignParam(PKField, V.AsVariant);
-      Break;
-    end;
-  end;
+  // Atribui parametro para CADA campo de PK (chave composta inclusive) - o codigo
+  // anterior so atribuia o primeiro e quebrava o loop, deixando params sem valor
+  // em chaves compostas mesmo com WHERE pedindo todos.
+  for F in FMeta.PKFields do
+    AssignParam(F.FieldName, F.GetValue(TObject(aValue)).AsVariant);
   FQuery.ExecSQL;
 end;
 
 function TAuroraDAO<T>.LastID: iAuroraDAO<T>;
+var
+  SQLText: string;
+  PK: TAuroraFieldMeta;
 begin
   Result := Self;
-  // Minimal implementation omitted
+  PK := FMeta.PrimaryPK;
+  if PK = nil then
+    Exit;
+  SQLText := System.SysUtils.Format('SELECT MAX(%s) AS last_id FROM %s', [PK.FieldName, QualifiedTableName(FMeta.TableName)]);
+  FQuery.SQL.Text := SQLText;
+  FQuery.Open;
 end;
 
 function TAuroraDAO<T>.LastRecord: iAuroraDAO<T>;
@@ -554,8 +463,11 @@ var
   SQLText, PKName, Tbl: string;
 begin
   Result := Self;
-  Tbl := QualifiedTableName(TableName);
-  PKName := PKFieldName;
+  Tbl := QualifiedTableName(FMeta.TableName);
+  if FMeta.PrimaryPK <> nil then
+    PKName := FMeta.PrimaryPK.FieldName
+  else
+    PKName := 'id';
   case TAuroraConfig.Dialect of
     dbSQLite: SQLText := System.SysUtils.Format('SELECT * FROM %s ORDER BY %s DESC LIMIT 1', [Tbl, PKName]);
     dbPostgreSQL, dbMySQL: SQLText := System.SysUtils.Format('SELECT * FROM %s ORDER BY %s DESC LIMIT 1', [Tbl, PKName]);
@@ -572,7 +484,7 @@ var
   SQLText: string;
 begin
   Result := Self;
-  SQLText := System.SysUtils.Format('DELETE FROM %s WHERE %s = :%s', [QualifiedTableName(TableName), aField, aField]);
+  SQLText := System.SysUtils.Format('DELETE FROM %s WHERE %s = :%s', [QualifiedTableName(FMeta.TableName), aField, aField]);
   FQuery.SQL.Text := SQLText;
   AssignParam(aField, aValue);
   FQuery.ExecSQL;
@@ -591,7 +503,7 @@ var
   SQLText: string;
 begin
   Result := Self;
-  SQLText := System.SysUtils.Format('SELECT * FROM %s', [QualifiedTableName(TableName)]);
+  SQLText := System.SysUtils.Format('SELECT * FROM %s', [QualifiedTableName(FMeta.TableName)]);
   if FSQLAttr.OrderBy <> '' then
     SQLText := SQLText + System.SysUtils.Format(' ORDER BY %s', [FSQLAttr.OrderBy]);
   FQuery.SQL.Text := SQLText;
@@ -604,7 +516,7 @@ var
   E: T;
 begin
   Result := Self;
-  SQLText := System.SysUtils.Format('SELECT * FROM %s', [QualifiedTableName(TableName)]);
+  SQLText := System.SysUtils.Format('SELECT * FROM %s', [QualifiedTableName(FMeta.TableName)]);
   if FSQLAttr.OrderBy <> '' then
     SQLText := SQLText + System.SysUtils.Format(' ORDER BY %s', [FSQLAttr.OrderBy]);
   FQuery.SQL.Text := SQLText;
@@ -624,8 +536,10 @@ var
   SQLText, PKName: string;
 begin
   Result := nil;
-  PKName := PKFieldName;
-  SQLText := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s', [QualifiedTableName(TableName), PKName, PKName]);
+  if FMeta.PrimaryPK = nil then
+    Exit;
+  PKName := FMeta.PrimaryPK.FieldName;
+  SQLText := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s', [QualifiedTableName(FMeta.TableName), PKName, PKName]);
   FQuery.SQL.Text := SQLText;
   AssignParam(PKName, aId);
   FQuery.Open;
@@ -637,8 +551,10 @@ var
   SQLText, PKName: string;
 begin
   Result := nil;
-  PKName := PKFieldName;
-  SQLText := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s', [QualifiedTableName(TableName), PKName, PKName]);
+  if FMeta.PrimaryPK = nil then
+    Exit;
+  PKName := FMeta.PrimaryPK.FieldName;
+  SQLText := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s', [QualifiedTableName(FMeta.TableName), PKName, PKName]);
   FQuery.SQL.Text := SQLText;
   AssignParam(PKName, aID);
   FQuery.Open;
@@ -650,7 +566,7 @@ var
   SQLText: string;
 begin
   Result := nil;
-  SQLText := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s', [QualifiedTableName(TableName), aKey, aKey]);
+  SQLText := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s', [QualifiedTableName(FMeta.TableName), aKey, aKey]);
   FQuery.SQL.Text := SQLText;
   AssignParam(aKey, aValue);
   FQuery.Open;
@@ -663,7 +579,7 @@ var
   E: T;
 begin
   Result := TObjectList<T>.Create(True);
-  SQLText := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s', [QualifiedTableName(TableName), aKey, aKey]);
+  SQLText := System.SysUtils.Format('SELECT * FROM %s WHERE %s = :%s', [QualifiedTableName(FMeta.TableName), aKey, aKey]);
   FQuery.SQL.Text := SQLText;
   AssignParam(aKey, aValue);
   FQuery.Open;
@@ -675,60 +591,6 @@ begin
       Result.Add(E);
     FQuery.DataSet.Next;
   end;
-end;
-
-function TAuroraDAO<T>.GetLocalValue(const AEntity: T; const ALocalKey: string; out V: Variant): Boolean;
-var
-  Typ: TRttiType;
-  Prop: TRttiProperty;
-  Attr: TCustomAttribute;
-  CampoName: string;
-begin
-  Result := False;
-  V := Null;
-  Typ := RTTIType;
-  if Typ = nil then Exit;
-  for Prop in Typ.GetProperties do
-  begin
-    if SameText(Prop.Name, ALocalKey) then
-    begin
-      V := Prop.GetValue(TObject(AEntity)).AsVariant;
-      Exit(True);
-    end;
-    CampoName := '';
-    for Attr in Prop.GetAttributes do
-      if Attr is Campo then
-        CampoName := Campo(Attr).Name;
-    if (CampoName <> '') and SameText(CampoName, ALocalKey) then
-    begin
-      V := Prop.GetValue(TObject(AEntity)).AsVariant;
-      Exit(True);
-    end;
-  end;
-end;
-
-function TAuroraDAO<T>.LoadOne<R>(var aEntity: T; const aLocalKey, aForeignKey: string; out aRelated: R): iAuroraDAO<T>;
-var
-  V: Variant;
-  D: iAuroraDAO<R>;
-begin
-  Result := Self;
-  aRelated := nil;
-  if not GetLocalValue(aEntity, aLocalKey, V) then Exit;
-  D := TAuroraDAO<R>.NewAurora(FQuery);
-  aRelated := D.FindOneWhere(aForeignKey, V);
-end;
-
-function TAuroraDAO<T>.LoadMany<R>(var aEntity: T; const aLocalKey, aForeignKey: string; out aList: TObjectList<R>): iAuroraDAO<T>;
-var
-  V: Variant;
-  D: iAuroraDAO<R>;
-begin
-  Result := Self;
-  aList := nil;
-  if not GetLocalValue(aEntity, aLocalKey, V) then Exit;
-  D := TAuroraDAO<R>.NewAurora(FQuery);
-  aList := D.FindWhere(aForeignKey, V);
 end;
 
 function TAuroraDAO<T>.Find(aKey: String; aValue: Variant): iAuroraDAO<T>;

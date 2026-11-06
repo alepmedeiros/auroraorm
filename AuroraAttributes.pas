@@ -46,6 +46,13 @@ type
   AutoInc = class(TCustomAttribute)
   end;
 
+  // Controle de concorrencia otimista (analogo a @Version do Hibernate/JPA).
+  // Campo numerico incrementado pelo proprio Aurora a cada UPDATE bem-sucedido;
+  // o WHERE do UPDATE passa a exigir o valor de versao lido, e 0 linhas afetadas
+  // significa que outra transacao alterou o registro entre o Find e o Update.
+  Version = class(TCustomAttribute)
+  end;
+
   NumberOnly = class(TCustomAttribute)
   end;
 
@@ -113,23 +120,39 @@ type
     constructor Create(const aRange: array of Integer); overload;
   end;
 
+  // EntityName referencia o nome da classe RTTI do lado relacionado (ex.: 'TProfile').
+  // LocalKey/ForeignKey sao opcionais; quando omitidos, a convencao e resolvida
+  // pelo AuroraMetadata a partir do tipo dono do atributo (ver AuroraMetadata.pas).
   Relationship = class abstract(TCustomAttribute)
   private
     FEntityName: string;
+    FLocalKey: string;
+    FForeignKey: string;
+    FJoinTable: string;
   public
-    constructor Create(const aEntityName: string);
+    constructor Create(const aEntityName: string; const aLocalKey: string = ''; const aForeignKey: string = ''; const aJoinTable: string = '');
     property EntityName: string read FEntityName write FEntityName;
+    property LocalKey: string read FLocalKey write FLocalKey;
+    property ForeignKey: string read FForeignKey write FForeignKey;
+    property JoinTable: string read FJoinTable write FJoinTable;
   end;
 
+  // 1:1, lado que possui a PK referenciada (ex.: TUser tem [HasOne('TProfile')]).
+  // Convencao: LocalKey = PK de TUser, ForeignKey = '<tabela_singular>_id' em TProfile.
   HasOne = class(Relationship)
   end;
 
+  // 1:1 ou N:1, lado que possui a FK (ex.: TProfile tem [BelongsTo('TUser')]).
+  // Convencao: LocalKey = '<tabela_singular_alvo>_id' nesta entidade, ForeignKey = PK do alvo.
   BelongsTo = class(Relationship)
   end;
-  
+
+  // 1:N, lado "um" (ex.: TUser tem [HasMany('TOrder')]). Carregamento lazy.
+  // Convencao: LocalKey = PK de TUser, ForeignKey = '<tabela_singular>_id' em TOrder.
   HasMany = class(Relationship)
   end;
 
+  // N:N via tabela de juncao. JoinTable e obrigatorio (nao ha convencao segura).
   BelongsToMany = class(Relationship)
   end;
 
@@ -207,18 +230,27 @@ end;
 
 { Relationship }
 
-constructor Relationship.Create(const aEntityName: string);
+constructor Relationship.Create(const aEntityName: string; const aLocalKey: string; const aForeignKey: string; const aJoinTable: string);
 begin
   FEntityName := aEntityName;
+  FLocalKey := aLocalKey;
+  FForeignKey := aForeignKey;
+  FJoinTable := aJoinTable;
 end;
 
-end.
+{ FK }
+
 constructor FK.Create(const aTable, aColumn: string);
 begin
   FTable := aTable;
   FColumn := aColumn;
 end;
+
+{ Index }
+
 constructor Index.Create(const aName: string);
 begin
   FName := aName;
 end;
+
+end.

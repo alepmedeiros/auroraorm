@@ -44,8 +44,6 @@ type
     {$IFNDEF CONSOLE}
     function BindForm(aForm : TForm)  : iAuroraDAO<T>;
     {$ENDIF}
-    function LoadOne<R: class, constructor>(var aEntity: T; const aLocalKey, aForeignKey: string; out aRelated: R): iAuroraDAO<T>;
-    function LoadMany<R: class, constructor>(var aEntity: T; const aLocalKey, aForeignKey: string; out aList: TObjectList<R>): iAuroraDAO<T>;
   end;
 
   iAuroraDAOSQLAttribute<T : class> = interface
@@ -110,6 +108,17 @@ type
     function DataSet : TDataSet;
     function Open(aSQL : String) : iAuroraQuery; overload;
     function Open : iAuroraQuery; overload;
+    // Linhas afetadas pelo ultimo ExecSQL - usado para detectar conflito de
+    // concorrencia otimista (UPDATE com WHERE de versao que afetou 0 linhas).
+    function RowsAffected : Integer;
+    // Nova instancia independente sobre a mesma conexao - usada para sub-consultas
+    // (ex.: carregamento de relacionamentos) sem perturbar o cursor/params ativos.
+    function Clone : iAuroraQuery;
+    // Controle de transacao de primeira classe (analogo ao Session do Hibernate).
+    function StartTransaction : iAuroraQuery;
+    function Commit : iAuroraQuery;
+    function Rollback : iAuroraQuery;
+    function InTransaction : Boolean;
   end;
 
   iAuroraCommon = interface

@@ -15,7 +15,9 @@ requires
 
 contains
   AuroraAttributes in 'AuroraAttributes.pas',
+  AuroraMetadata in 'AuroraMetadata.pas',
   AuroraDAO in 'AuroraDAO.pas',
+  AuroraRelations in 'AuroraRelations.pas',
   AuroraInterface in 'AuroraInterface.pas',
   AuroraQueryFiredac in 'AuroraQueryFiredac.pas',
   AuroraRTTI in 'AuroraRTTI.pas',

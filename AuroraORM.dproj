@@ -70,12 +70,13 @@
         <DCCReference Include="bindcomp.dcp"/>
         <DCCReference Include="RESTComponents.dcp"/>
         <DCCReference Include="AuroraAttributes.pas"/>
+        <DCCReference Include="AuroraMetadata.pas"/>
         <DCCReference Include="AuroraDAO.pas"/>
+        <DCCReference Include="AuroraRelations.pas"/>
         <DCCReference Include="AuroraInterface.pas"/>
         <DCCReference Include="AuroraQueryFiredac.pas"/>
         <DCCReference Include="AuroraRTTI.pas"/>
         <DCCReference Include="AuroraSQL.pas"/>
-        <DCCReference Include="AuroraDAOSQLAttribute.pas"/>
         <DCCReference Include="AuroraEntity.pas"/>
         <DCCReference Include="AuroraConfig.pas"/>
         <DCCReference Include="Aurora.Migrations.pas"/>

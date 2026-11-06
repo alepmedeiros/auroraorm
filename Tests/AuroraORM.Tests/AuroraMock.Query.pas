@@ -16,6 +16,8 @@ type
     FSQL: TStringList;
     FParams: TParams;
     FDataSet: TFDMemTable;
+    FInTransaction: Boolean;
+    FMockRowsAffected: Integer;
   public
     constructor Create; virtual;
     destructor Destroy; override;
@@ -23,6 +25,9 @@ type
     procedure ResetDataSet;
     procedure DefineField(const AName: string; AType: TFieldType);
     procedure AppendRow(const AValues: array of const);
+    // Numero de linhas que ExecSQL deve reportar via RowsAffected (default 1) -
+    // usado para simular conflito de concorrencia otimista (0 linhas).
+    property MockRowsAffected: Integer read FMockRowsAffected write FMockRowsAffected;
     // iAuroraQuery
     function SQL: TStrings;
     function Params: TParams;
@@ -30,6 +35,17 @@ type
     function DataSet: TDataSet;
     function Open(aSQL: String): iAuroraQuery; overload;
     function Open: iAuroraQuery; overload;
+    function RowsAffected: Integer;
+    // Clone devolve uma instancia nova e independente (dataset proprio, vazio).
+    // Sub-consultas de relacionamento (HasOne/BelongsTo eager, LoadMany lazy)
+    // portanto nao encontram linhas contra o mock - isso e esperado e seguro
+    // (retornam nil/lista vazia); carregamento de relacionamento de verdade e
+    // verificado contra SQLite real na sample AuroraHeadless, nao aqui.
+    function Clone: iAuroraQuery;
+    function StartTransaction: iAuroraQuery;
+    function Commit: iAuroraQuery;
+    function Rollback: iAuroraQuery;
+    function InTransaction: Boolean;
   end;
 
 implementation
@@ -42,6 +58,7 @@ begin
   FSQL := TStringList.Create;
   FParams := TParams.Create;
   FDataSet := TFDMemTable.Create(nil);
+  FMockRowsAffected := 1;
 end;
 
 destructor TAuroraMockQuery.Destroy;
@@ -112,6 +129,39 @@ function TAuroraMockQuery.Open: iAuroraQuery;
 begin
   // sem execução real; mantém o SQL já configurado
   Result := Self;
+end;
+
+function TAuroraMockQuery.RowsAffected: Integer;
+begin
+  Result := FMockRowsAffected;
+end;
+
+function TAuroraMockQuery.Clone: iAuroraQuery;
+begin
+  Result := TAuroraMockQuery.Create;
+end;
+
+function TAuroraMockQuery.StartTransaction: iAuroraQuery;
+begin
+  Result := Self;
+  FInTransaction := True;
+end;
+
+function TAuroraMockQuery.Commit: iAuroraQuery;
+begin
+  Result := Self;
+  FInTransaction := False;
+end;
+
+function TAuroraMockQuery.Rollback: iAuroraQuery;
+begin
+  Result := Self;
+  FInTransaction := False;
+end;
+
+function TAuroraMockQuery.InTransaction: Boolean;
+begin
+  Result := FInTransaction;
 end;
 
 end.

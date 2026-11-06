@@ -7,6 +7,7 @@ uses
   System.Rtti,
   AuroraInterface,
   AuroraAttributes,
+  AuroraMetadata,
   AuroraConfig;
 
 type
@@ -18,8 +19,8 @@ type
     FOrderBy: string;
     FGroupBy: string;
     FJoin: string;
-    function QualifiedTableName(const ATable: string): string;
-    function TableName: string;
+    FMeta: TAuroraEntityMeta;
+    function QualifiedTableName: string;
     function PKFieldName: string;
     function DefaultFields: string;
     function UpdateSet: string;
@@ -48,9 +49,6 @@ type
 
 implementation
 
-uses
-  AuroraRTTI;
-
 { TAuroraSQL<T> }
 
 constructor TAuroraSQL<T>.Create;
@@ -61,6 +59,7 @@ begin
   FOrderBy := '';
   FGroupBy := '';
   FJoin := '';
+  FMeta := TAuroraMetadataRegistry.GetOrBuild<T>;
 end;
 
 class function TAuroraSQL<T>.New: iAuroraSQL<T>;
@@ -68,71 +67,75 @@ begin
   Result := Self.Create;
 end;
 
-function TAuroraSQL<T>.QualifiedTableName(const ATable: string): string;
+function TAuroraSQL<T>.QualifiedTableName: string;
 begin
   if TAuroraConfig.UseSchemaPrefix then
-    Result := Format('%s.%s', [TAuroraConfig.Schema, ATable])
+    Result := System.SysUtils.Format('%s.%s', [TAuroraConfig.Schema, FMeta.TableName])
   else
-    Result := ATable;
-end;
-
-function TAuroraSQL<T>.TableName: string;
-var
-  Tbl: string;
-begin
-  Tbl := '';
-  TAuroraRTTI<T>.New(nil).TableName(Tbl);
-  Result := QualifiedTableName(Tbl);
+    Result := FMeta.TableName;
 end;
 
 function TAuroraSQL<T>.PKFieldName: string;
-var
-  PK: string;
 begin
-  PK := '';
-  TAuroraRTTI<T>.New(nil).PrimaryKey(PK);
-  if PK = '' then
-    PK := 'id';
-  Result := PK;
+  if FMeta.PrimaryPK <> nil then
+    Result := FMeta.PrimaryPK.FieldName
+  else
+    Result := 'id';
 end;
 
 function TAuroraSQL<T>.DefaultFields: string;
 var
+  F: TAuroraFieldMeta;
   S: string;
 begin
   S := '';
-  TAuroraRTTI<T>.New(nil).Fields(S);
-  S := Trim(S);
-  if S = '' then
+  for F in FMeta.Fields do
+    if not F.IsIgnore then
+      S := S + F.FieldName + ', ';
+  if S <> '' then
+    S := Copy(S, 1, Length(S) - 2)
+  else
     S := '*';
   Result := S;
 end;
 
 function TAuroraSQL<T>.UpdateSet: string;
 var
+  F: TAuroraFieldMeta;
   S: string;
 begin
   S := '';
-  TAuroraRTTI<T>.New(nil).Update(S);
-  Result := Trim(S);
+  for F in FMeta.UpdatableFields do
+    S := S + System.SysUtils.Format('%s = :%s, ', [F.FieldName, F.FieldName]);
+  if S <> '' then
+    S := Copy(S, 1, Length(S) - 2);
+  Result := S;
 end;
 
 function TAuroraSQL<T>.InsertFields: string;
 var
+  F: TAuroraFieldMeta;
   S: string;
 begin
   S := '';
-  TAuroraRTTI<T>.New(nil).FieldsInsert(S);
-  Result := Trim(S);
+  for F in FMeta.InsertableFields do
+    S := S + F.FieldName + ', ';
+  if S <> '' then
+    S := Copy(S, 1, Length(S) - 2);
+  Result := S;
 end;
 
 function TAuroraSQL<T>.InsertParams: string;
 var
+  F: TAuroraFieldMeta;
   S: string;
 begin
   S := '';
-  TAuroraRTTI<T>.New(nil).Param(S);
-  Result := Trim(S);
+  for F in FMeta.InsertableFields do
+    S := S + ':' + F.FieldName + ', ';
+  if S <> '' then
+    S := Copy(S, 1, Length(S) - 2);
+  Result := S;
 end;
 
 function TAuroraSQL<T>.Fields(aSQL: String): iAuroraSQL<T>;
@@ -166,56 +169,65 @@ begin
 end;
 
 function TAuroraSQL<T>.Insert(var aSQL: String): iAuroraSQL<T>;
-var
-  Flds, Prms: string;
 begin
   Result := Self;
-  Flds := InsertFields;
-  Prms := InsertParams;
-  aSQL := Format('INSERT INTO %s (%s) VALUES (%s)', [TableName, Flds, Prms]);
+  aSQL := System.SysUtils.Format('INSERT INTO %s (%s) VALUES (%s)', [QualifiedTableName, InsertFields, InsertParams]);
 end;
 
 function TAuroraSQL<T>.Update(var aSQL: String): iAuroraSQL<T>;
 var
   SetExpr, WhereExpr: string;
+  F: TAuroraFieldMeta;
 begin
   Result := Self;
   SetExpr := UpdateSet;
   if FWhere <> '' then
     WhereExpr := FWhere
   else
-    TAuroraRTTI<T>.New(nil).Where(WhereExpr);
+  begin
+    WhereExpr := '';
+    for F in FMeta.PKFields do
+      WhereExpr := WhereExpr + System.SysUtils.Format('%s = :%s AND ', [F.FieldName, F.FieldName]);
+    if WhereExpr <> '' then
+      WhereExpr := Copy(WhereExpr, 1, Length(WhereExpr) - 5);
+  end;
   WhereExpr := Trim(WhereExpr);
   if WhereExpr <> '' then
-    aSQL := Format('UPDATE %s SET %s WHERE %s', [TableName, SetExpr, WhereExpr])
+    aSQL := System.SysUtils.Format('UPDATE %s SET %s WHERE %s', [QualifiedTableName, SetExpr, WhereExpr])
   else
-    aSQL := Format('UPDATE %s SET %s', [TableName, SetExpr]);
+    aSQL := System.SysUtils.Format('UPDATE %s SET %s', [QualifiedTableName, SetExpr]);
 end;
 
 function TAuroraSQL<T>.Delete(var aSQL: String): iAuroraSQL<T>;
 var
   WhereExpr: string;
+  F: TAuroraFieldMeta;
 begin
   Result := Self;
   if FWhere <> '' then
     WhereExpr := FWhere
   else
-    TAuroraRTTI<T>.New(nil).Where(WhereExpr);
+  begin
+    WhereExpr := '';
+    for F in FMeta.PKFields do
+      WhereExpr := WhereExpr + System.SysUtils.Format('%s = :%s AND ', [F.FieldName, F.FieldName]);
+    if WhereExpr <> '' then
+      WhereExpr := Copy(WhereExpr, 1, Length(WhereExpr) - 5);
+  end;
   WhereExpr := Trim(WhereExpr);
   if WhereExpr <> '' then
-    aSQL := Format('DELETE FROM %s WHERE %s', [TableName, WhereExpr])
+    aSQL := System.SysUtils.Format('DELETE FROM %s WHERE %s', [QualifiedTableName, WhereExpr])
   else
-    aSQL := Format('DELETE FROM %s', [TableName]);
+    aSQL := System.SysUtils.Format('DELETE FROM %s', [QualifiedTableName]);
 end;
 
 function TAuroraSQL<T>.Select(var aSQL: String): iAuroraSQL<T>;
 var
   Flds: string;
-  Add: string;
 begin
   Result := Self;
   if FFields <> '' then Flds := FFields else Flds := DefaultFields;
-  aSQL := Format('SELECT %s FROM %s', [Flds, TableName]);
+  aSQL := System.SysUtils.Format('SELECT %s FROM %s', [Flds, QualifiedTableName]);
   if FJoin <> '' then aSQL := aSQL + ' ' + FJoin;
   if FWhere <> '' then aSQL := aSQL + ' WHERE ' + FWhere;
   if FGroupBy <> '' then aSQL := aSQL + ' GROUP BY ' + FGroupBy;
@@ -228,7 +240,7 @@ var
 begin
   Result := Self;
   PK := PKFieldName;
-  aSQL := Format('SELECT %s FROM %s WHERE %s = :%s', [DefaultFields, TableName, PK, PK]);
+  aSQL := System.SysUtils.Format('SELECT %s FROM %s WHERE %s = :%s', [DefaultFields, QualifiedTableName, PK, PK]);
 end;
 
 function TAuroraSQL<T>.LastID(var aSQL: String): iAuroraSQL<T>;
@@ -237,7 +249,7 @@ var
 begin
   Result := Self;
   PK := PKFieldName;
-  aSQL := Format('SELECT MAX(%s) AS last_id FROM %s', [PK, TableName]);
+  aSQL := System.SysUtils.Format('SELECT MAX(%s) AS last_id FROM %s', [PK, QualifiedTableName]);
 end;
 
 function TAuroraSQL<T>.LastRecord(var aSQL: String): iAuroraSQL<T>;
@@ -246,14 +258,14 @@ var
 begin
   Result := Self;
   PK := PKFieldName;
-  Tbl := TableName;
+  Tbl := QualifiedTableName;
   case TAuroraConfig.Dialect of
     dbSQLite, dbPostgreSQL, dbMySQL:
-      aSQL := Format('SELECT %s FROM %s ORDER BY %s DESC LIMIT 1', [DefaultFields, Tbl, PK]);
+      aSQL := System.SysUtils.Format('SELECT %s FROM %s ORDER BY %s DESC LIMIT 1', [DefaultFields, Tbl, PK]);
     dbSQLServer:
-      aSQL := Format('SELECT TOP 1 %s FROM %s ORDER BY %s DESC', [DefaultFields, Tbl, PK]);
+      aSQL := System.SysUtils.Format('SELECT TOP 1 %s FROM %s ORDER BY %s DESC', [DefaultFields, Tbl, PK]);
   else
-      aSQL := Format('SELECT FIRST 1 %s FROM %s ORDER BY %s DESC', [DefaultFields, Tbl, PK]);
+      aSQL := System.SysUtils.Format('SELECT FIRST 1 %s FROM %s ORDER BY %s DESC', [DefaultFields, Tbl, PK]);
   end;
 end;
 

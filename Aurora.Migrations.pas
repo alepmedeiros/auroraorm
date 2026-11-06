@@ -3,7 +3,7 @@ unit Aurora.Migrations;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.Generics.Collections, System.IOUtils,
+  System.SysUtils, System.Classes, System.Generics.Collections, System.Generics.Defaults, System.IOUtils,
   Data.DB,
   AuroraInterface, AuroraConfig;
 
